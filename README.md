@@ -10,3 +10,5 @@ The LitData.R code is for the data exploration part. We first change the mising 
 for each of the most popular strains (Figure 3 in report). 
 
 The corresponding codes to generate tables and figures are all in LitData.R with clear notation.
+
+The PHP2550_timeseries.Rmd is the rmarkdown file for the methods and nalysis plan.
