@@ -1,0 +1,172 @@
+---
+title: "PHP 2550 Methods and Analysis Plan"
+author: "Asghar Shah, Zhejia Dong, Abraham Liu"
+date: "11/12/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# Plan
+
+We are generally sticking to our original research question for the final project. In other words, we still aim to use time series to model the occurrences of infectious disease outbreaks. Since we know that foodborne illness is seasonal in nature, i.e. trends in incidence that vary by seasons, we are motivated to assess this seasonality specifically with respect to Listeria. As such, our final project research question is: Is there a seasonal association in the number of cases of Listeria? We are also updating our question to not focus on a specific strain because based on further data exploration, the labeling of strains as well as data limitations, we want to just deal with Listeria outbreaks on the whole. Perhaps in the future given better data documentation we can assess Listeria outbreaks by specific strain.
+
+```{r, echo = FALSE, results = 'hide'}
+library(tidyverse)
+library(knitr)
+library(TSA)
+library(forecast)
+```
+
+```{r, echo = FALSE}
+#load in dataset
+food<- read.csv("C:/Users/abrah/Downloads/isolates.csv")
+#view(food)
+```
+
+# Data Preprocessing
+
+We have conducted some additional preprocessing of the data since the last assignment submission. In order to conduct the time series analysis, we had to first clean up the dates by removing the minutes and keeping year-month only. We grouped on year-month and computed a count for the number of cases for that year-month. Moreover, we needed a vector of the counts for each year-month combination through the time elapsed between the year-month of the first case and the last reported case in the dataset. We created this vector by filling in the series of year-month combinations the number of reported cases. We also ran some analyses to isolate specific subtypes of Listeria across country of origin and source origin, but decided to combine and use all available evidence in the model, given the low counts when subsetting.
+
+```{r, echo = FALSE}
+#initiate new dataset for modification
+ts_df <- food
+#add a new date variable with the correct format
+ts_df$Date <- sapply(1:nrow(ts_df), function(x){
+  str_split(ts_df$Create.date[x],"T")[[1]][1]
+})
+ts_df$Date <- as.Date(ts_df$Date)
+
+#add new variable that only records year and month
+ts_df$Month_Yr <- format(as.Date(ts_df$Date), "%Y-%m")
+dates <- unique(ts_df$Month_Yr)
+
+#get counts of outbreaks for each month
+ts_data <- sapply(1:length(dates), function(x){
+  nrow(ts_df[ts_df$Month_Yr == dates[x],])
+})
+#sort(dates)
+```
+
+```{r, echo = FALSE}
+#put counts with their corresponding month and year into a dataframe
+count_frame <- data.frame(dates, ts_data)
+
+#create new dataframe with all the months between 05/2010 and 10/2022
+ts_vector <- data.frame(dates = format(seq.Date(from = as.Date("2010-05-1"), by = "month", length.out = 150), "%Y-%m"), counts = rep(0,150))
+#update count data in ts_vector with counts previously found
+for (i in 1:length(dates)){
+  ts_vector$counts[ts_vector$dates == dates[i]] = ts_data[i]
+}
+#head(ts_vector)
+```
+
+# Methods
+
+**Library: stats**
+
+> Method 1: Using the ts() function from stats to create the time-series object that will be inputted into our model. We set the start date to be 2010-05 and end date to be 2022-10 based on the first and last incidence of Listeria in the data, and we set the frequency parameter to 12 to account for the 12 months in a year. 
+
+> Method 2: Using the stl() function (short for seasonal and trend decomposition using Loess - locally estimated scatterplot smoothing) from stats to perform seasonal decomposition of the time series object by Loess. Plotting this yields four panels over time: 1) the data 2) seasonality 3) trend 4) irregular components (remainder). 
+
+**Library: forecast**
+
+The forecast package has relevant functions that we have been using and intend to use for further development of the project.
+
+> Method 1: Arima(). The ARIMA function takes in the time series object and fits an ARIMA model to it. ARIMA is an autoregressive integrated moving average model. It can be used to predict future points in a time series. This function can also take in a specification for the seasonal component, a fitting method (i.e. max likelihood or condition sum of squares), etc. 
+
+> Method 2: accuracy(). Accuracy takes in the forecast model and provides summary statistics for relevant accuracy measures. These include mean error, root mean squared error, mean absolute error, mean percentage error, mean absolute percentage error, mean absolute scaled error, autocorrelation of errors at lag 1. This function might be useful in the future when comparing forecast models. 
+
+**Library: TSA**
+
+The TSA package has functions related to time-series analysis that are helpful for our study
+
+> Method 1: eacf() creates a matrix of extended autocorrelation. It takes in parameters for how big to make the matrix (ar.max and ma.max). Significant pairs will be marked with an ‘x’, and nonsignificant pairs will be marked with an ‘o’.
+
+We are implementing a time series model through the use of the ts() function and Arima() function to fit our time series model. Through the use of the acf(), pacf(), and eacf() functions, we find our tuning parameters to fit the ARIMA model and use this ARIMA model to forecast future results. High spikes in forecast data should represent big outbreaks in the future. 
+
+We are also considering adding additional data from other sources to use as covariates, such as weather patterns. This might help with forecasting if outbreaks are correlated.
+
+When fitting our model, we plan to do some parameter tuning (finding the best autoregressive parameters, moving average parameters, and seasonality parameters for fitting the model). We can tune the model through the use of the autocorrelation functions, and then compare different models through the use of AIC and BIC.
+
+We can also conduct accuracy checks. One way to do so is through dropping the last 10 or so months of data and forecast these 10 months to check the overall performance of the model forecasting. This can also serve as another method for choosing the final time series model. The accuracy() function can also be used to get statistics like ME and RMSE, which gives a more quantifiable comparison.
+
+When in the future we decide to incorporate covariates (and possibly opt for a poisson model), we can incorporate additional model building based on whether the covariates help with forecasting.
+
+# Justification 
+
+If we use historical data from a specific region, we can use this model to potentially predict future outbreaks in said region. Assuming that the dataset properly recorded the time of the disease outbreak, future researchers can follow this model building process to check for seasonality of data and forecast future disease outbreaks.
+
+\newpage
+
+# Initial Implementation 
+
+Below is a plot of the counts data over time (Keeling curve). 
+
+```{r, echo = FALSE, out.width="70%"}
+#now have listeria outbreak counts in form of time series data
+list_ts <- ts(ts_vector$counts, start=c(2010, 5), end=c(2022, 10), frequency=12)
+
+# plot series
+plot(list_ts)
+```
+
+We can clearly see that ever since 2014 there seems to be big outbreak spikes at the end of each year, and there also seems to be a positive trend for outbreaks as time increases. However, we can analyze this further through the seasonal decomposition plot.
+
+```{r, echo = FALSE, out.width="70%"}
+#decomposition
+fit <- stl(list_ts, s.window="period")
+plot(fit)
+```
+
+
+
+It seems quite apparent from here that there is seasonality, and there seems to be an overall positive trend. The number of outbreaks per month seems to drop at the end of 2022, but this is inconclusive since the data collection of the entire year of 2022 is not available yet. For now we will assume that there is a positive linear trend. Although there seems to be increasing variance in the later years of the remainder, it seems to be mostly random noise without a particular pattern. Thus we can conclude that the seasonal decompisition was able to extract the seasonality and trend components.
+
+We will now take a look at the autocorrelation functions to choose our Autoregressive parameters and Moving Average parameters for our ARIMA model. We can do so through the use of the ACF and PACF functions. 
+
+Since there is trends and seasonality involved, we used the diff function to remove the trend with a difference of 12 (since our time points are by month). Through this, the ACF plot suggests a MA parameter of 5 and the PACF plot suggests an AR parameter of 4. An extended ACF function will let us know all the significant pairings up to a max MA of 5 and a max AR of 4.
+
+```{r, echo = FALSE}
+#remove trend from time series data
+#since it's monthly take a difference = 12
+list_diff <- diff(list_ts, differences = 12)
+plot ACF
+ACF suggests MA of 5
+acf(list_diff)
+```
+
+```{r, echo = FALSE}
+plot PACF
+PACF suggests AR of 4
+pacf(list_diff)
+```
+
+```{r, echo = FALSE}
+#now run extended acf with max AR and MA from earlier
+eacf(list_diff, ar.max = 4, ma.max = 5)
+```
+
+Thus, we decided to fit an ARIMA $(4,1,1) \times (3,1,1)_{12}$. Fitting the model gives us the following (with forecasting up to 5 years in the future)
+
+```{r, echo = FALSE}
+#can run any of the significant combinations. Will try AR 4 MA 1 with seasonal AR 3 and seasonal MA 1
+list_model <- Arima(list_ts, order = c(4,1,1), seasonal = list(order = c(3,1,1), period = 12))
+list_model
+```
+
+```{r, echo = FALSE}
+plot(forecast(list_model, level=c(95), h=5*12))
+```
+
+From the forecasting, we can see that this model adopts a positive linear trend and also incorporates outbreak spikes near the end of each year. We can also check our mean error and other diagnostic statistics through the accuracy function below. This will be relevant when comparing different ARIMA models. 
+
+```{r, echo = FALSE}
+accuracy(list_model)
+```
+
+Github Repository link: https://github.com/zhejiadong/PHP2550
