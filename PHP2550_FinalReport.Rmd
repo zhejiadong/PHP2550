@@ -79,11 +79,13 @@ dates <- dates[27:length(dates)]
 
 ts_df <- ts_df[ts_df$Date %in% dates,]
 
+#create week variable for the overall dataset
 full_calender <- seq(as.Date("2014-01-02"), as.Date("2022-10-18"), by = "days")
 ts_df$week_num <- rep(1, nrow(ts_df))
 for (i in 0:(ceiling(length(full_calender)/7)-1)){
   ts_df$week_num[ts_df$Date %in% full_calender[(1+7*i):(7+7*i)]] <- i+1
 }
+#get max number of weeks
 num_weeks <- max(ts_df$week_num)
 
 #label of season for each week in a year
@@ -93,10 +95,12 @@ season_var <- c(rep(season_year, 9))[1:num_weeks]
 ```
 
 ```{r, echo = FALSE}
+#create time series data for overall cases
 overall_ts <- rep(0, num_weeks)
 for (j in 1:num_weeks){
   overall_ts[j] <- nrow(ts_df[ts_df$week_num == j,])
 }
+#plot time series 
 e <- data.frame(weeks = 1:num_weeks, Cases = overall_ts)
 ggplot(e, aes(x = weeks, y = Cases)) + geom_point() + geom_line() + 
   labs(title = "Time Series of Overall Cases") + 
@@ -142,6 +146,7 @@ where $\alpha_1$ represents the coefficient for the conditional mean of the prev
 Prior to describing the results pertaining to model building, selection, and forecasting, it is important to have a general understanding of the underlying data. The data set used for analysis is structured row-wise and consists of 54,246 isolates. The top 5 SNP clusters by count were PDS000000366.504 (n=1744), PDS000025311.254 (1253),  PDS000024989.120 (992), PDS000024645.152 (859), and PDS000024656.185 (857). The date range for the included isolates was 2014-01-02 to 2022-10-18. The isolation source groups we used for categorization included meat sources (n=2194), dairy sources (1776), sea food sources (844), and blood sources (3151).  
 
 ```{r, echo = FALSE}
+#get top SNP clusters
 a <- as.data.frame(table(food$SNP.cluster)) 
 sorted_Clusters<- a[order(-a$Freq),] 
 total <- sum(sorted_Clusters$Freq)
@@ -150,6 +155,7 @@ total <- sum(sorted_Clusters$Freq)
 ```
 
 ```{r, echo = FALSE}
+#get cluster variable covariate data
 cluster_matrix <- matrix(0, nrow = num_weeks, ncol = 5)
 #grab top 5 (excluding the unknown strains)
 for (i in 2:6){
@@ -160,46 +166,57 @@ for (i in 2:6){
 ```
 
 ```{r, echo = FALSE}
+#fit poisson model with only SNP clusters covariates
 pois_cluster <- tsglm(ts = overall_ts[1:364], model = list(past_obs = 1), xreg = cluster_matrix[1:364,], distr = "poisson")
 
 #summary(pois_cluster)
 ```
 
 ```{r, echo = FALSE}
+#MSE function for 1 observation
 MSE_calc <- function(covariates, mod_coef) {
   set.seed(0)
   #initialize MSE vector 
   MSE_vals <- c()
   #get MSE values of the forecasts for the next 6 months
   next_y <- c(overall_ts[364])
+  #6 months of forecasting
   for (j in 0:25) {
+    #find lambda value
     mod_lambda <- mod_coef %*% c(1, next_y[j+1], covariates[365+j,])
+    #use lambda value as predicted estimate
     MSE_vals <- c(MSE_vals, (overall_ts[365+j] - mod_lambda)^2)
+    #use lambda value for next outcome step
     next_y <- c(next_y, mod_lambda)
   }
   return(sum(MSE_vals)/length(MSE_vals))
 }
+#calculate MSE of poison cluster model
 cluster_MSE <- MSE_calc(cluster_matrix, coef(pois_cluster))
 #cluster_MSE
 ```
 
 ```{r, echo = FALSE}
+#create season variable
 season_factor <- as.numeric(as.factor(season_var))
 #get covariates of cluster variables, season variable, and interaction between the cluster variables and season
 cseason_matrix <- cbind(cluster_matrix, as.factor(season_var), cluster_matrix * season_factor)
 
+#fit poisson cluster variable interacting with season model
 pois_cseason <- tsglm(overall_ts[1:364], model = list(past_obs = 1), xreg = cseason_matrix[1:364,], distr = "poisson")
 
-summary(pois_cseason)
+#summary(pois_cseason)
 ```
 
 ```{r, echo = FALSE}
+#calculate MSE
 cseason_MSE <- MSE_calc(cseason_matrix, coef(pois_cseason))
 #cseason_MSE
 ```
 
 
 ```{r, echo = FALSE}
+#isolate sources
 b <- as.data.frame(table(food$Isolation.source)) 
 sorted_sources<- b[order(-b$Freq),] 
 iso_source <- unique(b$Var1)
@@ -217,6 +234,7 @@ meat_source <- meat_source[!(meat_source %in% meat_seafood)]
 ```
 
 ```{r, echo = FALSE}
+#get isolate sources covariate data
 source_matrix <- matrix(0, nrow = num_weeks, ncol = 4)
 #grab top 5 (excluding the unknown strains)
 
@@ -226,12 +244,14 @@ for (j in 1:num_weeks){
   source_matrix[j,3] <- nrow(ts_df[ts_df$week_num == j & ts_df$Isolation.source %in% dairy_source,])
   source_matrix[j,4] <- nrow(ts_df[ts_df$week_num == j & ts_df$Isolation.source %in% blood_source,])
 }
+#fit poisson isolate source model
 pois_source <- tsglm(overall_ts[1:364], model = list(past_obs = 1), xreg = source_matrix[1:364,], distr = "poisson")
 
 #summary(pois_source)
 ```
 
 ```{r, echo = FALSE}
+#calculate MSE for given model
 source_MSE <- MSE_calc(source_matrix, coef(pois_source))
 #source_MSE
 ```
@@ -239,13 +259,14 @@ source_MSE <- MSE_calc(source_matrix, coef(pois_source))
 ```{r, echo = FALSE}
 #get covariates of source variables, season variable, and interaction between the source variables and season
 isoseason_matrix <- cbind(source_matrix, as.factor(season_var), source_matrix * season_factor)
-
+#fit poisson isolate source interacting with season model
 pois_isoseason <- tsglm(overall_ts[1:364], model = list(past_obs = 1), xreg = isoseason_matrix[1:364,], distr = "poisson")
 
 #summary(pois_isoseason)
 ```
 
 ```{r, echo = FALSE}
+#calculate MSE for given model
 isoseason_MSE <- MSE_calc(isoseason_matrix, coef(pois_isoseason))
 #isoseason_MSE
 ```
@@ -254,12 +275,14 @@ isoseason_MSE <- MSE_calc(isoseason_matrix, coef(pois_isoseason))
 #get covariates of cluster variables and source variables
 isocluster_matrix <- cbind(cluster_matrix, source_matrix)
 
+#fit poisson cluster + isolates model
 pois_isocluster <- tsglm(overall_ts[1:364], model = list(past_obs = 1), xreg = isocluster_matrix[1:364,], distr = "poisson")
 
 #summary(pois_isocluster)
 ```
 
 ```{r, echo = FALSE}
+#calculate MSE for given model
 isocluster_MSE <- MSE_calc(isocluster_matrix, coef(pois_isocluster))
 #isocluster_MSE
 ```
@@ -268,12 +291,14 @@ isocluster_MSE <- MSE_calc(isocluster_matrix, coef(pois_isocluster))
 #get covariates of cluster variables and source variables, season variable, and the interaction between cluster + seasonal and source + seasonal
 all_matrix <- cbind(cluster_matrix, source_matrix, as.factor(season_var), cluster_matrix * season_factor, source_matrix * season_factor)
 
+#fit poisson model with cluster and source variables interacting with season
 pois_all <- tsglm(overall_ts[1:364], model = list(past_obs = 1), xreg = all_matrix[1:364,], distr = "poisson")
 
 #summary(pois_all)
 ```
 
 ```{r, echo = FALSE}
+#calculate MSE for given model
 all_MSE <- MSE_calc(all_matrix, coef(pois_all))
 #all_MSE
 ```
@@ -281,6 +306,7 @@ all_MSE <- MSE_calc(all_matrix, coef(pois_all))
 Below is our table that lists the AIC and MSE of each of the 6 initial poisson models we fitted. Although it's a bit strange that the model with isolation source variables only and the model with isolation source variables interacting with the season variable had a high AIC and a low MSE, this could indicate that the model was overfitted, especially since the AIC better indicates fit than the MSE. Overall, it's clear to see that the 6th model incorporating cluster variables interacting with season and isolation source variables interacting with season had the best model fit, with the lowest AIC (13473.30) and the lowest MSE (4056.937).
 
 ```{r, echo = FALSE}
+#get table depicting AIC and MSE for each model
 models <- c("Cluster Variables", "Cluster with Seasons", "Source Variables", "Source with Seasons", "Cluster and Source", "Cluster, Source, and Seasons")
 AIC_vals <- c(AIC(pois_cluster),AIC(pois_cseason),AIC(pois_source),AIC(pois_isoseason),AIC(pois_isocluster), AIC(pois_all))
 meanmse <- c(cluster_MSE,cseason_MSE,source_MSE,isoseason_MSE,isocluster_MSE,all_MSE)
@@ -292,6 +318,7 @@ data.frame(Models = models, AIC = AIC_vals, MSE = meanmse) %>%
 ```
 
 ```{r, echo = FALSE}
+#old code to get time series forecasting
 #final <- tsglm(overall_ts[1:364], model = list(past_obs = 1), xreg = all_matrix[1:364,], distr = "poisson")
 ```
 
@@ -319,12 +346,14 @@ set.seed(0)
 ```
 
 ```{r, echo = FALSE}
+#fit model with 2 observations
 pois_cluster2 <- tsglm(ts = overall_ts[1:364], model = list(past_obs = c(1,2)), xreg = cluster_matrix[1:364,], distr = "poisson")
 
 #summary(pois_cluster2)
 ```
 
 ```{r, echo = FALSE}
+#new MSE calculator function for 2 observations
 MSE_calc2 <- function(covariates, mod_coef) {
   set.seed(0)
   #initialize MSE vector 
@@ -338,6 +367,7 @@ MSE_calc2 <- function(covariates, mod_coef) {
   }
   return(sum(MSE_vals)/length(MSE_vals))
 }
+#get MSE
 cluster_MSE2 <- MSE_calc2(cluster_matrix, coef(pois_cluster2))
 #cluster_MSE2
 ```
@@ -399,6 +429,7 @@ all_MSE2 <- MSE_calc2(all_matrix, coef(pois_all2))
 ```
 
 ```{r, echo = FALSE}
+#code for getting table of AIC and MSE for 2 observation models 
 models <- c("Cluster Variables", "Cluster with Seasons", "Source Variables", "Source with Seasons", "Cluster and Source", "Cluster, Source, and Seasons")
 AIC_vals2 <- c(AIC(pois_cluster2),AIC(pois_cseason2),AIC(pois_source2),AIC(pois_isoseason2),AIC(pois_isocluster2), AIC(pois_all2))
 mse2 <- c(cluster_MSE2,cseason_MSE2,source_MSE2,isoseason_MSE2,isocluster_MSE2,all_MSE2)
@@ -410,12 +441,14 @@ mse2 <- c(cluster_MSE2,cseason_MSE2,source_MSE2,isoseason_MSE2,isocluster_MSE2,a
 ```
 
 ```{r, echo = FALSE}
+#fit models for 3 observations
 pois_cluster3 <- tsglm(ts = overall_ts[1:364], model = list(past_obs = c(1,2,3)), xreg = cluster_matrix[1:364,], distr = "poisson")
 
 #summary(pois_cluster3)
 ```
 
 ```{r, echo = FALSE}
+#MSE calculator function for 3 observations
 MSE_calc3 <- function(covariates, mod_coef) {
   set.seed(0)
   #initialize MSE vector 
@@ -492,6 +525,7 @@ all_MSE3 <- MSE_calc3(all_matrix, coef(pois_all3))
 At this point, we also decided to check the performance when autoregressing on 1, 2, or 3 past observations. The table below lists the AIC and MSE for each model based on the number of past observations autoregressed (AIC1 represents autoregressing on 1 observation, AIC2 represents autoregressing on 2 observations, etc). Overall, it was determined that autoregressing more observations did not help much with model fit. It's clear to see that AIC and MSE values in general increased or stayed relatively the same. Thus it was decided that autoregressing on 1 observation for the 6th model incorporating all the variables was the best model fit. 
 
 ```{r, echo = FALSE}
+#table for checking AIC and MSE of all models with 1, 2, and 3 observations
 models <- c("Cluster Variables", "Cluster with Seasons", "Source Variables", "Source with Seasons", "Cluster and Source", "Cluster, Source, and Seasons")
 AIC_vals3 <- c(AIC(pois_cluster3),AIC(pois_cseason3),AIC(pois_source3),AIC(pois_isoseason3),AIC(pois_isocluster3), AIC(pois_all3))
 mse3 <- c(cluster_MSE3,cseason_MSE3,source_MSE3,isoseason_MSE3,isocluster_MSE3,all_MSE3)
@@ -503,10 +537,12 @@ data.frame(Models = models, AIC1 = AIC_vals, AIC2 = AIC_vals2, AIC3 = AIC_vals3,
 ```
 
 ```{r, echo = FALSE}
+#get frequencies for weekly cases (50 is highest frequency, then 55)
 #sort(table(overall_ts))
 ```
 
 ```{r, echo = FALSE}
+#MSE calculator function for 1 observation and 1 conditional mean autoregressed on
 MSE_mean <- function(covariates, mod_coef, past_mean) {
   set.seed(0)
   #initialize MSE vector 
@@ -524,6 +560,7 @@ MSE_mean <- function(covariates, mod_coef, past_mean) {
 ```
 
 ```{r, echo = FALSE}
+#fit base negative binomial model
 nbm_all <- tsglm(overall_ts[1:364], model = list(past_obs = 1), xreg = all_matrix[1:364,], distr = "nbinom")
 #summary(nbm_all)
 ```
@@ -534,6 +571,7 @@ nbm_MSE <- MSE_calc(all_matrix, coef(nbm_all))
 ```
 
 ```{r, echo = FALSE}
+#fit negative binomial model with initial conditional mean 50
 nbm_all1 <- tsglm(overall_ts[1:364], model = list(past_obs = 1, past_mean = 50), xreg = all_matrix[1:364,], distr = "nbinom")
 #summary(nbm_all1)
 ```
@@ -544,6 +582,7 @@ nbm_MSE1 <- MSE_mean(all_matrix, coef(nbm_all1), 50)
 ```
 
 ```{r, echo = FALSE}
+#fit negative binomial model with initial conditional mean 55
 nbm_all2 <- tsglm(overall_ts[1:364], model = list(past_obs = 1, past_mean = 55), xreg = all_matrix[1:364,], distr = "nbinom")
 #summary(nbm_all2)
 ```
@@ -554,6 +593,7 @@ nbm_MSE2 <- MSE_mean(all_matrix, coef(nbm_all2), 55)
 ```
 
 ```{r, echo = FALSE}
+#fit negative binomial model with initial conditional mean as the rounded average weekly cases
 nbm_all3 <- tsglm(overall_ts[1:364], model = list(past_obs = 1, past_mean = floor(mean(overall_ts))), xreg = all_matrix[1:364,], distr = "nbinom")
 #summary(nbm_all3)
 ```
@@ -566,6 +606,7 @@ nbm_MSE3 <- MSE_mean(all_matrix, coef(nbm_all3), floor(mean(overall_ts)))
 Next, we checked if the model can be improved when fitting with a negative binomial distribution, since it can help with overdispersion. We fitted 4 different negative binomial models, one by itself, one autoregressing on a past conditional mean of the highest frequency weekly case number (50), one autoregressing on a past conditional mean of the second highest frequency weekly case (55), and one autoregressing on a past conditional mean of the rounded average weekly case.  Below is a table listing the AIC and MSE of each negative binomial model in addition to the best performing poisson model. We can see a clear drop in the AIC for the negative binomial model that doesn't autoregress on a past conditional mean, and having the same MSE estimate as the best performing Poisson model.
 
 ```{r, echo = FALSE}
+#new table to show AIC and MSE of best poisson model and negative binomial models
 models4 <- c("Poisson", "Neg Binomial", "Neg Binomial w/ mean = 50", "Neg Binomial w/ mean = 55", "Neg Binomial w/ mean = average")
 AIC_vals4 <- c(AIC(pois_all), AIC(nbm_all), AIC(nbm_all1), AIC(nbm_all2),AIC(nbm_all3))
 mse4 <- c(all_MSE, nbm_MSE, nbm_MSE1, nbm_MSE2, nbm_MSE3)
@@ -578,6 +619,7 @@ data.frame(Models = models4, AIC = AIC_vals4, MSE = mse4) %>%
 
 
 ```{r, echo = FALSE}
+#final models chosen for forecasting
 pois_mod <- tsglm(overall_ts[1:364], model = list(past_obs = 1), xreg = all_matrix[1:364,], distr = "poisson")
 nbm_mod <- tsglm(overall_ts[1:364], model = list(past_obs = 1), xreg = all_matrix[1:364,], distr = "nbinom")
 ```
@@ -587,7 +629,9 @@ Now we can check the performance of the best poisson and negative binomial model
 We can see from the plot below that the negative binomial model predicts spikes a lot better than the poisson model. This shows that there was overdispersion within our data. However, one should note that the poisson model seems to forecast results better on nonspikes, which could be because of the higher variance in the negative binomial model. 
 
 ```{r, echo = FALSE}
+#forecast plot
 set.seed(10)
+#simulate forecast trajectories
 mp_counts <- c(overall_ts[312:364])
 mn_counts <- c(overall_ts[312:364])
 mn_lambda <- c(floor(mean(overall_ts)))
@@ -598,6 +642,7 @@ for (i in 364:415){
 }
 obs_counts <- c(overall_ts[312:416])
 
+#get dataframe for plot
 ts_final2 <- data.frame(Weeks = rep(312:416,3), Cases = c(mp_counts, mn_counts, obs_counts), Models = c(rep("Best Poisson Model", 105), rep("Best Negative Binomial Model", 105), rep("Observed", 105)))
 
 ggplot(ts_final2, aes(x = Weeks, y = Cases, color = Models, groups = Models)) + 
@@ -605,6 +650,7 @@ ggplot(ts_final2, aes(x = Weeks, y = Cases, color = Models, groups = Models)) +
   theme(legend.position = "bottom") + 
   scale_x_continuous(name = "Time (in Weeks)", breaks = c(1, 53, 105, 157, 209, 261, 313, 365), 
                      labels = c("2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021"))
+#if we wanted to save our plot as a png file
 ggsave(filename = "ts_plot2.png", plot = ggplot(ts_final2, aes(x = Weeks, y = Cases, color = Models, groups = Models)) + 
   geom_point() + geom_line() + labs(title = "Forecasted Cases with Observed") + 
   theme(legend.position = "bottom")) + 
@@ -617,6 +663,7 @@ Below are tables of each model's coefficients as well as their standard error an
 For the Poisson model, we can see that overall the SNP clusters were highly significant in the model. The last SNP cluster (PDS000024656.185) was not viewed as significant by itself, but the interaction between it and the season variable was viewed as significant. We can also see that the seafood and blood isolation sources were viewed as significant, and that the interaction between meat and season as well as dairy and season were viewed as significant. However, there were many interactions between season and other variables that were not viewed as significant, which could indicate that season was overall not an important variable for the model. This model seems to indicate that the first 4 SNP clusters as well as the seafood and blood sources seem to have an association with the total number of cases. 
 
 ```{r, echo = FALSE}
+#get poisson model summary
 pois_coef <- data.frame(summary(pois_mod)[5])
 variables <- c("Intercept", "Past Observation", "PDS000000366.504", "PDS000025311.254", "PDS000024989.120", "PDS000024645.152", "PDS000024656.185","Meat Source", "Dairy Source", "Seafood Source", "Blood Source", "Season", "PDS000000366.504 * Season", "PDS000025311.254 * Season", "PDS000024989.120 * Season", "PDS000024645.152 * Season", "PDS000024656.185 * Season","Meat Source * Season", "Dairy Source * Season", "Seafood Source * Season", "Blood Source * Season")
 pois_coef <- cbind(variables, pois_coef)
@@ -629,6 +676,7 @@ pois_coef %>%
 Interestingly enough, the negative binomial has every variable as insignificant, which seems to indicate that no variable is associated with the total number of cases. This is in stark difference with the Poisson model, with many significant variables. Further investigation with model selection can be done to see if there are signifiant variables within the negative binomial model.
 
 ```{r, echo = FALSE}
+#get negative binomial model summary
 nbm_coef <- data.frame(summary(nbm_mod)[5])
 nbm_coef <- cbind(c(variables, "Dispersion Parameter"), nbm_coef)
 nbm_coef %>% 
